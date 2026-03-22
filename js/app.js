@@ -1,33 +1,32 @@
 /**
  * App – application state, routing, event handling, and rendering.
- *
  * Depends on: storage.js, game.js
  */
 const App = (() => {
 
-  // ── App State ────────────────────────────────────────────────────────────────
-  let currentView       = 'home';
-  let currentGame       = null;   // live game state object
-  let undoStack         = [];     // array of snapshots (game states before each action)
-  let newGamePlayers    = [];     // player names being built for a new game
-  let lastGamePlayers   = [];     // for rematch
-  let lbSortKey         = 'totalPoints';
+  // ── State ───────────────────────────────────────────────────────────────────
+  let currentGame     = null;
+  let undoStack       = [];
+  let newGamePlayers  = [];
+  let lastGamePlayers = [];
+  let lbSortKey       = 'totalPoints';
+  let lastGameResult  = null;   // set after a game ends so leaderboard can show the result
 
-  // Kill / trade modal state
   let killState  = { phase: 0, killerIdx: null, victimIdx: null };
   let tradeState = { idx1: null, idx2: null };
 
   const MAX_UNDO = 30;
 
-  // ── Routing ──────────────────────────────────────────────────────────────────
+  // ── Routing ─────────────────────────────────────────────────────────────────
   function showView(id) {
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    document.getElementById('view-' + id).classList.add('active');
-    currentView = id;
+    const el = document.getElementById('view-' + id);
+    if (el) el.classList.add('active');
     window.scrollTo(0, 0);
   }
 
   function showHome() {
+    lastGameResult = null;
     const saved = Storage.getCurrentGame();
     document.getElementById('resume-banner').classList.toggle('hidden', !saved);
     showView('home');
@@ -39,7 +38,7 @@ const App = (() => {
     renderSavedPlayers();
     document.getElementById('player-name-input').value = '';
     showView('new-game');
-    setTimeout(() => document.getElementById('player-name-input').focus(), 300);
+    setTimeout(() => document.getElementById('player-name-input').focus(), 200);
   }
 
   function showLeaderboard() {
@@ -54,22 +53,16 @@ const App = (() => {
 
   function showRules() { showView('rules'); }
 
-  function goHomeFromGame() {
-    // Game is auto-saved on every action; just go home
-    showHome();
-  }
+  function goHomeFromGame() { showHome(); }
 
-  // ── Dark Mode ────────────────────────────────────────────────────────────────
-  function applyTheme(dark) {
-    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
-  }
+  // ── Theme ───────────────────────────────────────────────────────────────────
   function toggleDarkMode() {
     const dark = !Storage.getDarkMode();
     Storage.saveDarkMode(dark);
-    applyTheme(dark);
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
   }
 
-  // ── New Game Setup ────────────────────────────────────────────────────────────
+  // ── New Game Setup ──────────────────────────────────────────────────────────
   function addPlayer() {
     const input = document.getElementById('player-name-input');
     const name  = input.value.trim();
@@ -78,7 +71,6 @@ const App = (() => {
     if (newGamePlayers.length >= 20)   { toast('Max 20 players'); return; }
 
     newGamePlayers.push(name);
-    // Save to known players list
     const saved = Storage.getSavedPlayers();
     if (!saved.includes(name)) { saved.push(name); Storage.savePlayers(saved); }
 
@@ -94,7 +86,7 @@ const App = (() => {
   }
 
   function addSavedPlayer(name) {
-    if (newGamePlayers.includes(name)) { toast(`${name} already added`); return; }
+    if (newGamePlayers.includes(name)) { toast(name + ' already added'); return; }
     newGamePlayers.push(name);
     renderPlayerList();
   }
@@ -104,17 +96,17 @@ const App = (() => {
     const msg  = document.getElementById('player-count-msg');
     const btn  = document.getElementById('start-game-btn');
 
-    list.innerHTML = newGamePlayers.map((name, i) => `
-      <div class="player-list-item">
-        <span>${esc(name)}</span>
-        <button class="remove-player-btn" onclick="App.removePlayer(${i})">✕</button>
-      </div>
-    `).join('');
+    list.innerHTML = newGamePlayers.map((name, i) =>
+      '<div class="player-list-item">' +
+        '<span>' + esc(name) + '</span>' +
+        '<button class="remove-player-btn" onclick="App.removePlayer(' + i + ')">✕</button>' +
+      '</div>'
+    ).join('');
 
     const n = newGamePlayers.length;
     msg.textContent = n === 0 ? 'Add at least 2 players to start'
                     : n === 1 ? 'Add at least 1 more player'
-                    : `${n} players ready`;
+                    : n + ' players ready';
     btn.disabled = n < 2;
   }
 
@@ -125,14 +117,16 @@ const App = (() => {
 
     if (saved.length === 0) { row.classList.add('hidden'); return; }
     row.classList.remove('hidden');
-    list.innerHTML = saved.map(name => `
-      <button class="saved-player-chip" onclick="App.addSavedPlayer('${esc(name)}')">${esc(name)}</button>
-    `).join('');
+
+    list.innerHTML = saved.map(function(name) {
+      // Use data attribute + delegation-safe onclick
+      return '<button class="saved-player-chip" onclick="App.addSavedPlayer(this.dataset.name)" data-name="' + esc(name) + '">' + esc(name) + '</button>';
+    }).join('');
   }
 
   function startGame() {
     if (newGamePlayers.length < 2) return;
-    lastGamePlayers = [...newGamePlayers];
+    lastGamePlayers = [].concat(newGamePlayers);
     currentGame = Game.create(newGamePlayers);
     undoStack = [];
     saveGameState();
@@ -151,61 +145,63 @@ const App = (() => {
 
   function rematch() {
     if (!lastGamePlayers.length) { showHome(); return; }
-    newGamePlayers = [...lastGamePlayers];
+    newGamePlayers = [].concat(lastGamePlayers);
     currentGame = Game.create(newGamePlayers);
     undoStack = [];
+    lastGameResult = null;
     saveGameState();
     renderGame();
     showView('game');
   }
 
-  // ── Live Game – Save & Render ─────────────────────────────────────────────────
+  // ── Live Game ───────────────────────────────────────────────────────────────
   function saveGameState() {
-    Storage.saveCurrentGame({ game: currentGame, undoStack });
+    Storage.saveCurrentGame({ game: currentGame, undoStack: undoStack });
   }
 
   function renderGame() {
-    const grid = document.getElementById('game-players-grid');
+    const grid    = document.getElementById('game-players-grid');
     const players = currentGame.players;
+    const alive   = players.filter(function(p) { return !p.isOut; });
 
-    // Determine leader (highest score among alive)
-    const alive = players.filter(p => !p.isOut);
-    let leaderIdx = -1;
-    if (alive.length > 0) {
-      const maxScore = Math.max(...alive.map(p => p.score));
-      const leader = alive.find(p => p.score === maxScore);
-      if (leader) leaderIdx = players.indexOf(leader);
+    // Find leader among alive
+    var leaderIdx = -1;
+    if (alive.length > 1) {
+      var maxScore = -Infinity;
+      for (var i = 0; i < players.length; i++) {
+        if (!players[i].isOut && players[i].score > maxScore) {
+          maxScore = players[i].score;
+          leaderIdx = i;
+        }
+      }
     }
 
-    grid.innerHTML = players.map((p, i) => {
-      const isLeader = (i === leaderIdx && alive.length > 1);
-      const lives = '♥'.repeat(p.lives) + '♡'.repeat(2 - p.lives);
-      const streakHot = p.streak >= 3;
-      return `
-        <div class="player-card ${p.isOut ? 'out' : ''} ${isLeader ? 'leader' : ''}">
-          ${isLeader ? '<div class="leader-crown">👑</div>' : ''}
-          ${p.isOut  ? '<div class="out-badge">OUT</div>' : ''}
-          <div class="player-card-top">
-            <div class="player-name">${esc(p.name)}</div>
-            <div class="player-lives" title="${p.lives} lives remaining">${lives}</div>
-          </div>
-          <div class="player-card-bottom">
-            <div>
-              <div class="player-score-val">${p.score} pts</div>
-            </div>
-            <span class="streak-badge ${streakHot ? 'hot' : ''}">🔥 ${p.streak}</span>
-            <div class="player-kd">K:${p.kills} D:${p.deaths}</div>
-          </div>
-        </div>
-      `;
-    }).join('');
+    var html = '';
+    for (var i = 0; i < players.length; i++) {
+      var p = players[i];
+      var isLeader = (i === leaderIdx);
+      var livesStr = '';
+      for (var j = 0; j < p.lives; j++) livesStr += '♥';
+      for (var j = p.lives; j < 2; j++) livesStr += '♡';
+      var streakHot = p.streak >= 3;
 
-    // Disable undo button if nothing to undo
-    const undoBtn = document.querySelector('#view-game .btn-ghost');
-    if (undoBtn) undoBtn.disabled = undoStack.length === 0;
+      html += '<div class="player-card ' + (p.isOut ? 'out' : '') + ' ' + (isLeader ? 'leader' : '') + '">';
+      if (isLeader) html += '<div class="leader-crown">👑</div>';
+      if (p.isOut)  html += '<div class="out-badge">OUT</div>';
+      html += '<div class="player-card-top">';
+      html += '  <div class="player-name">' + esc(p.name) + '</div>';
+      html += '  <div class="player-lives">' + livesStr + '</div>';
+      html += '</div>';
+      html += '<div class="player-card-bottom">';
+      html += '  <div><div class="player-score-val">' + p.score + ' pts</div></div>';
+      html += '  <span class="streak-badge ' + (streakHot ? 'hot' : '') + '">🔥 ' + p.streak + '</span>';
+      html += '  <div class="player-kd">K:' + p.kills + ' D:' + p.deaths + '</div>';
+      html += '</div></div>';
+    }
+    grid.innerHTML = html;
   }
 
-  // ── Actions ──────────────────────────────────────────────────────────────────
+  // ── Actions ─────────────────────────────────────────────────────────────────
   function undoAction() {
     if (undoStack.length === 0) { toast('Nothing to undo'); return; }
     currentGame = undoStack.pop();
@@ -214,312 +210,256 @@ const App = (() => {
     toast('Undone ↩');
   }
 
-  function pushUndo(snapshot) {
-    undoStack.push(snapshot);
-    if (undoStack.length > MAX_UNDO) undoStack.shift();
-  }
-
   function applyAction(result) {
-    pushUndo(result.snapshot);
+    undoStack.push(result.snapshot);
+    if (undoStack.length > MAX_UNDO) undoStack.shift();
     currentGame = result.game;
     saveGameState();
     renderGame();
 
     if (currentGame.finished) {
-      // Short delay so the final kill/OUT badge is visible before summary appears
-      setTimeout(endGame, 350);
+      // Brief pause so the user can see the final OUT badge, then end
+      setTimeout(function() { finishGame(); }, 400);
     }
   }
 
-  // ── Kill Modal ────────────────────────────────────────────────────────────────
+  // ── Kill Modal ──────────────────────────────────────────────────────────────
   function startKillAction() {
+    if (currentGame.finished) return;
+    var alive = Game.alivePlayers(currentGame);
+    if (alive.length < 2) { toast('Need 2+ alive players'); return; }
     killState = { phase: 1, killerIdx: null, victimIdx: null };
-    openModal(renderKillModal);
+    openModal(buildKillModal);
   }
 
-  function renderKillModal() {
-    const alive = Game.alivePlayers(currentGame);
-    if (alive.length < 2) { closeModal(); toast('Need 2+ alive players'); return; }
+  function buildKillModal() {
+    var alive = Game.alivePlayers(currentGame);
+    if (alive.length < 2) return '<div class="modal-title">Not enough players</div><div class="modal-actions"><button class="btn btn-ghost" onclick="App.closeModal()">OK</button></div>';
 
-    const phase = killState.phase;
-
-    if (phase === 1) {
-      return `
-        <div class="modal-title">⚔️ Who got the kill?</div>
-        <div class="modal-sub">Select the killer</div>
-        <div class="player-select-grid">
-          ${alive.map(p => `
-            <button class="player-select-btn" onclick="App.killSelectKiller(${p.index})">
-              ${esc(p.name)}
-              <span class="psbsub">Streak: ${p.streak} → next +${p.streak + 1}</span>
-            </button>
-          `).join('')}
-        </div>
-        <div class="modal-actions">
-          <button class="btn btn-ghost" onclick="App.closeModal()">Cancel</button>
-        </div>
-      `;
+    if (killState.phase === 1) {
+      var btns = '';
+      for (var i = 0; i < alive.length; i++) {
+        var p = alive[i];
+        btns += '<button class="player-select-btn" onclick="App.killSelectKiller(' + p.index + ')">' +
+          esc(p.name) + '<span class="psbsub">Streak: ' + p.streak + ' → next +' + (p.streak + 1) + '</span></button>';
+      }
+      return '<div class="modal-title">⚔️ Who got the kill?</div>' +
+        '<div class="modal-sub">Select the killer</div>' +
+        '<div class="player-select-grid">' + btns + '</div>' +
+        '<div class="modal-actions"><button class="btn btn-ghost" onclick="App.closeModal()">Cancel</button></div>';
     }
 
-    if (phase === 2) {
-      const killer = currentGame.players[killState.killerIdx];
-      return `
-        <div class="modal-title">⚔️ ${esc(killer.name)} eliminated…</div>
-        <div class="modal-sub">Select the victim</div>
-        <div class="player-select-grid">
-          ${alive
-            .filter(p => p.index !== killState.killerIdx)
-            .map(p => `
-              <button class="player-select-btn ${killState.victimIdx === p.index ? 'selected' : ''}"
-                      onclick="App.killSelectVictim(${p.index})">
-                ${esc(p.name)}
-                <span class="psbsub">${'♥'.repeat(p.lives)} ${p.lives} life(ves)</span>
-              </button>
-            `).join('')}
-        </div>
-        ${killState.victimIdx !== null ? renderKillPreview() : ''}
-        <div class="modal-actions">
-          <button class="btn btn-ghost" onclick="App.killStep1()">← Back</button>
-          <button class="btn btn-primary" id="confirm-kill-btn"
-                  onclick="App.executeKill()"
-                  ${killState.victimIdx === null ? 'disabled' : ''}>
-            Confirm Kill
-          </button>
-        </div>
-      `;
-    }
-  }
+    if (killState.phase === 2) {
+      var killer = currentGame.players[killState.killerIdx];
+      var btns = '';
+      for (var i = 0; i < alive.length; i++) {
+        var p = alive[i];
+        if (p.index === killState.killerIdx) continue;
+        var sel = (killState.victimIdx === p.index) ? 'selected' : '';
+        btns += '<button class="player-select-btn ' + sel + '" onclick="App.killSelectVictim(' + p.index + ')">' +
+          esc(p.name) + '<span class="psbsub">' + '♥'.repeat(p.lives) + ' ' + p.lives + ' lives</span></button>';
+      }
 
-  function renderKillPreview() {
-    if (killState.victimIdx === null) return '';
-    const p = Game.previewKill(currentGame, killState.killerIdx, killState.victimIdx);
-    return `
-      <div class="preview-box">
-        <div class="preview-row">
-          <span>⚔️ ${esc(p.killerName)}</span>
-          <span class="preview-pos">+${p.killPts} pts</span>
-        </div>
-        <div class="preview-row">
-          <span>💀 ${esc(p.victimName)}</span>
-          <span class="preview-neg">−1 pt, −1 life</span>
-        </div>
-        ${p.victimEliminated ? `<div class="preview-elim">🔴 ${esc(p.victimName)} is eliminated!</div>` : ''}
-      </div>
-    `;
+      var preview = '';
+      if (killState.victimIdx !== null) {
+        var pv = Game.previewKill(currentGame, killState.killerIdx, killState.victimIdx);
+        preview = '<div class="preview-box">' +
+          '<div class="preview-row"><span>⚔️ ' + esc(pv.killerName) + '</span><span class="preview-pos">+' + pv.killPts + ' pts</span></div>' +
+          '<div class="preview-row"><span>💀 ' + esc(pv.victimName) + '</span><span class="preview-neg">−1 pt, −1 life</span></div>' +
+          (pv.victimEliminated ? '<div class="preview-elim">🔴 ' + esc(pv.victimName) + ' is eliminated!</div>' : '') +
+          '</div>';
+      }
+
+      return '<div class="modal-title">⚔️ ' + esc(killer.name) + ' eliminated…</div>' +
+        '<div class="modal-sub">Select the victim</div>' +
+        '<div class="player-select-grid">' + btns + '</div>' +
+        preview +
+        '<div class="modal-actions">' +
+        '<button class="btn btn-ghost" onclick="App.killStep1()">← Back</button>' +
+        '<button class="btn btn-primary" onclick="App.executeKill()"' + (killState.victimIdx === null ? ' disabled' : '') + '>Confirm Kill</button>' +
+        '</div>';
+    }
+
+    return '';
   }
 
   function killStep1() {
-    killState.phase = 1;
-    killState.killerIdx = null;
-    killState.victimIdx = null;
-    refreshModal(renderKillModal);
+    killState = { phase: 1, killerIdx: null, victimIdx: null };
+    refreshModal(buildKillModal);
   }
 
   function killSelectKiller(idx) {
     killState.killerIdx = idx;
     killState.phase = 2;
     killState.victimIdx = null;
-    refreshModal(renderKillModal);
+    refreshModal(buildKillModal);
   }
 
   function killSelectVictim(idx) {
     killState.victimIdx = idx;
-    refreshModal(renderKillModal);
+    refreshModal(buildKillModal);
   }
 
   function executeKill() {
     if (killState.killerIdx === null || killState.victimIdx === null) return;
+    var killerName = currentGame.players[killState.killerIdx].name;
+    var victimName = currentGame.players[killState.victimIdx].name;
     closeModal();
-    const result = Game.recordKill(currentGame, killState.killerIdx, killState.victimIdx);
-    const killer = currentGame.players[killState.killerIdx].name;
-    const victim  = currentGame.players[killState.victimIdx].name;
-    toast(`⚔️ ${killer} eliminated ${victim}`);
+    var result = Game.recordKill(currentGame, killState.killerIdx, killState.victimIdx);
+    toast('⚔️ ' + killerName + ' → ' + victimName);
     applyAction(result);
   }
 
-  // ── Trade Modal ───────────────────────────────────────────────────────────────
+  // ── Trade Modal ─────────────────────────────────────────────────────────────
   function startTradeAction() {
+    if (currentGame.finished) return;
+    var alive = Game.alivePlayers(currentGame);
+    if (alive.length < 2) { toast('Need 2+ alive players'); return; }
     tradeState = { idx1: null, idx2: null };
-    openModal(renderTradeModal);
+    openModal(buildTradeModal);
   }
 
-  function renderTradeModal() {
-    const alive = Game.alivePlayers(currentGame);
-    if (alive.length < 2) { closeModal(); toast('Need 2+ alive players'); return; }
+  function buildTradeModal() {
+    var alive = Game.alivePlayers(currentGame);
+    if (alive.length < 2) return '<div class="modal-title">Not enough players</div><div class="modal-actions"><button class="btn btn-ghost" onclick="App.closeModal()">OK</button></div>';
 
-    const bothSelected = tradeState.idx1 !== null && tradeState.idx2 !== null;
-
-    return `
-      <div class="modal-title">🔄 Trade – Select 2 Players</div>
-      <div class="modal-sub">Both hit each other simultaneously</div>
-      <div class="player-select-grid">
-        ${alive.map(p => {
-          const sel = p.index === tradeState.idx1 || p.index === tradeState.idx2;
-          return `
-            <button class="player-select-btn ${sel ? 'selected' : ''}"
-                    onclick="App.tradeToggle(${p.index})">
-              ${esc(p.name)}
-              <span class="psbsub">Streak: ${p.streak} → +${p.streak + 1}</span>
-            </button>
-          `;
-        }).join('')}
-      </div>
-      ${bothSelected ? renderTradePreview() : ''}
-      <div class="modal-actions">
-        <button class="btn btn-ghost" onclick="App.closeModal()">Cancel</button>
-        <button class="btn btn-warning" onclick="App.executeTrade()" ${bothSelected ? '' : 'disabled'}>
-          Confirm Trade
-        </button>
-      </div>
-    `;
-  }
-
-  function renderTradePreview() {
-    if (tradeState.idx1 === null || tradeState.idx2 === null) return '';
-    const p = Game.previewTrade(currentGame, tradeState.idx1, tradeState.idx2);
-    function row(side) {
-      return `
-        <div class="preview-row">
-          <span>🔄 ${esc(side.name)}</span>
-          <span class="${side.net >= 0 ? 'preview-pos' : 'preview-neg'}">
-            +${side.killPts} kill, −1 life = ${side.net >= 0 ? '+' : ''}${side.net}
-          </span>
-        </div>
-        ${side.eliminated ? `<div class="preview-elim">🔴 ${esc(side.name)} is eliminated!</div>` : ''}
-      `;
+    var both = (tradeState.idx1 !== null && tradeState.idx2 !== null);
+    var btns = '';
+    for (var i = 0; i < alive.length; i++) {
+      var p = alive[i];
+      var sel = (p.index === tradeState.idx1 || p.index === tradeState.idx2) ? 'selected' : '';
+      btns += '<button class="player-select-btn ' + sel + '" onclick="App.tradeToggle(' + p.index + ')">' +
+        esc(p.name) + '<span class="psbsub">Streak: ' + p.streak + ' → +' + (p.streak + 1) + '</span></button>';
     }
-    return `<div class="preview-box">${row(p.p1)}${row(p.p2)}</div>`;
+
+    var preview = '';
+    if (both) {
+      var pv = Game.previewTrade(currentGame, tradeState.idx1, tradeState.idx2);
+      function tradeRow(s) {
+        var cls = s.net >= 0 ? 'preview-pos' : 'preview-neg';
+        var sign = s.net >= 0 ? '+' : '';
+        return '<div class="preview-row"><span>🔄 ' + esc(s.name) + '</span><span class="' + cls + '">+' + s.killPts + ' kill, −1 life = ' + sign + s.net + '</span></div>' +
+          (s.eliminated ? '<div class="preview-elim">🔴 ' + esc(s.name) + ' eliminated!</div>' : '');
+      }
+      preview = '<div class="preview-box">' + tradeRow(pv.p1) + tradeRow(pv.p2) + '</div>';
+    }
+
+    return '<div class="modal-title">🔄 Trade – Select 2 Players</div>' +
+      '<div class="modal-sub">Both hit each other simultaneously</div>' +
+      '<div class="player-select-grid">' + btns + '</div>' +
+      preview +
+      '<div class="modal-actions">' +
+      '<button class="btn btn-ghost" onclick="App.closeModal()">Cancel</button>' +
+      '<button class="btn btn-warning" onclick="App.executeTrade()"' + (both ? '' : ' disabled') + '>Confirm Trade</button>' +
+      '</div>';
   }
 
   function tradeToggle(idx) {
-    if (tradeState.idx1 === idx) { tradeState.idx1 = tradeState.idx2; tradeState.idx2 = null; }
+    if (tradeState.idx1 === idx)      { tradeState.idx1 = tradeState.idx2; tradeState.idx2 = null; }
     else if (tradeState.idx2 === idx) { tradeState.idx2 = null; }
-    else if (tradeState.idx1 === null) { tradeState.idx1 = idx; }
-    else if (tradeState.idx2 === null) { tradeState.idx2 = idx; }
-    else { tradeState.idx1 = tradeState.idx2; tradeState.idx2 = idx; } // replace oldest
-    refreshModal(renderTradeModal);
+    else if (tradeState.idx1 === null){ tradeState.idx1 = idx; }
+    else if (tradeState.idx2 === null){ tradeState.idx2 = idx; }
+    else { tradeState.idx1 = tradeState.idx2; tradeState.idx2 = idx; }
+    refreshModal(buildTradeModal);
   }
 
   function executeTrade() {
     if (tradeState.idx1 === null || tradeState.idx2 === null) return;
+    var n1 = currentGame.players[tradeState.idx1].name;
+    var n2 = currentGame.players[tradeState.idx2].name;
     closeModal();
-    const p1 = currentGame.players[tradeState.idx1].name;
-    const p2 = currentGame.players[tradeState.idx2].name;
-    const result = Game.recordTrade(currentGame, tradeState.idx1, tradeState.idx2);
-    toast(`🔄 Trade: ${p1} ⇄ ${p2}`);
+    var result = Game.recordTrade(currentGame, tradeState.idx1, tradeState.idx2);
+    toast('🔄 ' + n1 + ' ⇄ ' + n2);
     applyAction(result);
   }
 
-  // ── Force End ─────────────────────────────────────────────────────────────────
+  // ── End Game ────────────────────────────────────────────────────────────────
   function confirmForceEnd() {
-    // If the game already finished naturally (auto-end timer pending), go straight to summary
-    if (currentGame.finished) {
-      endGame();
-      return;
-    }
+    if (currentGame.finished) { finishGame(); return; }
 
-    const alive = Game.alivePlayers(currentGame);
+    var alive = Game.alivePlayers(currentGame);
 
     if (alive.length <= 1) {
-      // One (or zero) alive — end naturally without a modal
-      const result = Game.forceEnd(currentGame);
-      pushUndo(result.snapshot);
+      var result = Game.forceEnd(currentGame);
+      undoStack.push(result.snapshot);
       currentGame = result.game;
       saveGameState();
-      endGame();
+      finishGame();
       return;
     }
 
-    // Multiple players still alive — ask for confirmation
-    openModal(() => `
-      <div class="modal-title">🏁 End Game?</div>
-      <div class="modal-sub">
-        ${alive.length} players still alive.<br>
-        Highest score wins with +3 bonus.
-      </div>
-      <div class="preview-box">
-        ${[...alive].sort((a,b) => b.score - a.score).slice(0,3).map((p,i) =>
-          `<div class="preview-row"><span>${i===0?'🥇':i===1?'🥈':'🥉'} ${esc(p.name)}</span><span>${p.score} pts</span></div>`
-        ).join('')}
-      </div>
-      <div class="modal-actions">
-        <button class="btn btn-ghost"  onclick="App.closeModal()">Keep Playing</button>
-        <button class="btn btn-danger" onclick="App.forceEndGame()">End Game</button>
-      </div>
-    `);
+    // Multiple alive – show confirmation
+    var rows = '';
+    var sorted = [].concat(alive).sort(function(a, b) { return b.score - a.score; });
+    var medals = ['🥇','🥈','🥉'];
+    for (var i = 0; i < Math.min(sorted.length, 5); i++) {
+      rows += '<div class="preview-row"><span>' + (medals[i] || (i+1)) + ' ' + esc(sorted[i].name) + '</span><span>' + sorted[i].score + ' pts</span></div>';
+    }
+
+    openModal(function() {
+      return '<div class="modal-title">🏁 End Game?</div>' +
+        '<div class="modal-sub">' + alive.length + ' players still alive.<br>Highest score wins with +3 bonus.</div>' +
+        '<div class="preview-box">' + rows + '</div>' +
+        '<div class="modal-actions">' +
+        '<button class="btn btn-ghost" onclick="App.closeModal()">Keep Playing</button>' +
+        '<button class="btn btn-danger" onclick="App.forceEndGame()">End Game</button>' +
+        '</div>';
+    });
   }
 
   function forceEndGame() {
     closeModal();
-    const result = Game.forceEnd(currentGame);
-    pushUndo(result.snapshot);
+    var result = Game.forceEnd(currentGame);
+    undoStack.push(result.snapshot);
     currentGame = result.game;
     saveGameState();
-    // Navigate to summary immediately — no timer
-    endGame();
+    finishGame();
   }
 
-  // ── End Game / Summary ────────────────────────────────────────────────────────
-  let _lastEndedGameId = null; // prevents double-recording if auto-end and manual end race
+  /**
+   * finishGame – THE single function that ends a game.
+   * Saves to history, updates leaderboard, navigates to leaderboard view.
+   */
+  var _finishedGameId = null;
 
-  function endGame() {
-    if (!currentGame || _lastEndedGameId === currentGame.id) return;
-    _lastEndedGameId = currentGame.id;
+  function finishGame() {
+    if (!currentGame) return;
+    if (_finishedGameId === currentGame.id) {
+      // Already processed this game – just navigate
+      showLeaderboard();
+      return;
+    }
+    _finishedGameId = currentGame.id;
 
-    const summary = Game.buildSummary(currentGame);
-    lastGamePlayers = currentGame.players.map(p => p.name);
+    var summary = Game.buildSummary(currentGame);
+    lastGamePlayers = currentGame.players.map(function(p) { return p.name; });
 
-    // Update persistent leaderboard
+    // Persist
     updateLeaderboard(summary);
-    // Save to history
     Storage.addToHistory(summary);
-    // Clear in-progress game
     Storage.clearCurrentGame();
 
-    renderSummary(currentGame, summary);
-    showView('summary');
+    // Store result so leaderboard view can show the winner banner
+    lastGameResult = {
+      winner: currentGame.winner,
+      isPerfectWin: currentGame.isPerfectWin,
+      players: currentGame.players.slice().sort(function(a, b) { return b.score - a.score; }),
+    };
+
+    // Show leaderboard
+    renderLeaderboard();
+    showView('leaderboard');
   }
 
-  function renderSummary(game, summary) {
-    const winnerCard = document.getElementById('summary-winner-card');
-    const results    = document.getElementById('summary-results');
-
-    if (game.winner) {
-      const winner = game.players.find(p => p.name === game.winner);
-      winnerCard.innerHTML = `
-        <div class="winner-label">Winner</div>
-        <div class="winner-name">🏆 ${esc(game.winner)}</div>
-        <div class="winner-sub">${winner ? winner.score + ' points' : ''}</div>
-        ${game.isPerfectWin ? '<div class="perfect-badge">✨ Perfect Win!</div>' : ''}
-      `;
-    } else {
-      winnerCard.innerHTML = `
-        <div class="winner-label">Result</div>
-        <div class="winner-name" style="font-size:1.3rem">🤝 Draw!</div>
-        <div class="winner-sub">All players eliminated simultaneously</div>
-      `;
-    }
-
-    const sorted = [...game.players].sort((a, b) => b.score - a.score);
-    const rankEmoji = ['🥇','🥈','🥉'];
-    results.innerHTML = sorted.map((p, i) => `
-      <div class="result-row">
-        <div class="result-rank">${rankEmoji[i] || (i + 1)}</div>
-        <div>
-          <div class="result-name">${esc(p.name)}</div>
-          <div class="result-stats">K: ${p.kills} | D: ${p.deaths} | Best streak: ${p.maxStreak}</div>
-        </div>
-        <div class="result-score">${p.score}</div>
-      </div>
-    `).join('');
-  }
-
-  // ── Leaderboard ───────────────────────────────────────────────────────────────
+  // ── Leaderboard ─────────────────────────────────────────────────────────────
   function updateLeaderboard(summary) {
-    const lb = Storage.getLeaderboard();
-    summary.players.forEach(p => {
-      if (!lb[p.name]) lb[p.name] = { totalPoints:0, gamesPlayed:0, wins:0, perfectWins:0, totalKills:0, totalDeaths:0, bestStreak:0 };
-      const e = lb[p.name];
+    var lb = Storage.getLeaderboard();
+    for (var i = 0; i < summary.players.length; i++) {
+      var p = summary.players[i];
+      if (!lb[p.name]) {
+        lb[p.name] = { totalPoints: 0, gamesPlayed: 0, wins: 0, perfectWins: 0, totalKills: 0, totalDeaths: 0, bestStreak: 0 };
+      }
+      var e = lb[p.name];
       e.gamesPlayed += 1;
       e.totalPoints += p.score;
       e.totalKills  += p.kills;
@@ -529,71 +469,141 @@ const App = (() => {
         e.wins += 1;
         if (summary.isPerfectWin) e.perfectWins += 1;
       }
-    });
+    }
     Storage.saveLeaderboard(lb);
   }
 
   function sortLeaderboard(key, btn) {
     lbSortKey = key;
-    document.querySelectorAll('.sort-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.sort-btn').forEach(function(b) { b.classList.remove('active'); });
     if (btn) btn.classList.add('active');
     renderLeaderboard();
   }
 
   function renderLeaderboard() {
-    const lb      = Storage.getLeaderboard();
-    const table   = document.getElementById('leaderboard-table');
-    const empty   = document.getElementById('leaderboard-empty');
-    const entries = Object.entries(lb).map(([name, e]) => ({
-      name, ...e,
-      avgPoints: e.gamesPlayed > 0 ? (e.totalPoints / e.gamesPlayed) : 0,
-    }));
+    var container  = document.getElementById('leaderboard-content');
+    var lb         = Storage.getLeaderboard();
+    var entries    = [];
 
-    if (entries.length === 0) {
-      table.innerHTML = '';
-      empty.classList.remove('hidden');
-      return;
+    var keys = Object.keys(lb);
+    for (var i = 0; i < keys.length; i++) {
+      var name = keys[i];
+      var e = lb[name];
+      var avg = e.gamesPlayed > 0 ? (e.totalPoints / e.gamesPlayed) : 0;
+      var kd  = e.totalDeaths > 0 ? (e.totalKills / e.totalDeaths)  : e.totalKills;
+      entries.push({
+        name: name,
+        totalPoints: e.totalPoints,
+        gamesPlayed: e.gamesPlayed,
+        wins: e.wins,
+        perfectWins: e.perfectWins,
+        totalKills: e.totalKills,
+        totalDeaths: e.totalDeaths,
+        bestStreak: e.bestStreak,
+        avgPoints: avg,
+        kd: kd,
+      });
     }
-    empty.classList.add('hidden');
 
-    entries.sort((a, b) => {
+    // Sort
+    entries.sort(function(a, b) {
       if (lbSortKey === 'avgPoints') return b.avgPoints - a.avgPoints;
-      return b[lbSortKey] - a[lbSortKey];
+      return (b[lbSortKey] || 0) - (a[lbSortKey] || 0);
     });
 
-    const rankClass = (i) => i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : '';
-    const rankEmoji = (i) => ['🥇','🥈','🥉'][i] || (i + 1);
+    var html = '';
 
-    table.innerHTML = entries.map((e, i) => {
-      const avg = e.avgPoints.toFixed(1);
-      return `
-        <div class="lb-row">
-          <div class="lb-rank ${rankClass(i)}">${rankEmoji(i)}</div>
-          <div>
-            <div class="lb-name">${esc(e.name)}</div>
-            <div class="lb-sub">
-              ${e.gamesPlayed}G · ${e.wins}W${e.perfectWins ? ` (${e.perfectWins} perfect)` : ''} · K:${e.totalKills} D:${e.totalDeaths} · Best streak: ${e.bestStreak}
-            </div>
-          </div>
-          <div>
-            <div class="lb-pts">${e.totalPoints}</div>
-            <div style="font-size:0.75rem;color:var(--text-muted);text-align:right">${avg} avg</div>
-          </div>
-        </div>
-      `;
-    }).join('');
+    // ── Winner banner (only shown when coming from a finished game) ──
+    if (lastGameResult) {
+      if (lastGameResult.winner) {
+        html += '<div class="winner-card">';
+        html += '<div class="winner-label">Game Over!</div>';
+        html += '<div class="winner-name">🏆 ' + esc(lastGameResult.winner) + '</div>';
+        if (lastGameResult.isPerfectWin) {
+          html += '<div class="perfect-badge">✨ Perfect Win!</div>';
+        }
+        html += '</div>';
+      } else {
+        html += '<div class="winner-card"><div class="winner-label">Game Over!</div><div class="winner-name" style="font-size:1.3rem">🤝 Draw!</div></div>';
+      }
+
+      // Show this-game results
+      html += '<div class="card"><h3>This Game</h3><div class="results-list">';
+      var medals = ['🥇','🥈','🥉'];
+      var gp = lastGameResult.players;
+      for (var i = 0; i < gp.length; i++) {
+        html += '<div class="result-row">';
+        html += '<div class="result-rank">' + (medals[i] || (i + 1)) + '</div>';
+        html += '<div><div class="result-name">' + esc(gp[i].name) + '</div>';
+        html += '<div class="result-stats">K:' + gp[i].kills + ' D:' + gp[i].deaths + ' | Streak:' + gp[i].maxStreak + '</div></div>';
+        html += '<div class="result-score">' + gp[i].score + '</div>';
+        html += '</div>';
+      }
+      html += '</div></div>';
+
+      // Rematch / Home buttons
+      html += '<div class="summary-actions">';
+      html += '<button class="btn btn-primary" onclick="App.rematch()">🔄 Rematch</button>';
+      html += '<button class="btn btn-secondary" onclick="App.showHome()">🏠 Home</button>';
+      html += '</div>';
+    }
+
+    // ── Sort row ──
+    html += '<div class="sort-row">';
+    html += '<span class="sort-label">Sort by:</span>';
+    html += '<button class="sort-btn ' + (lbSortKey === 'totalPoints' ? 'active' : '') + '" onclick="App.sortLeaderboard(\'totalPoints\',this)">Points</button>';
+    html += '<button class="sort-btn ' + (lbSortKey === 'wins' ? 'active' : '') + '" onclick="App.sortLeaderboard(\'wins\',this)">Wins</button>';
+    html += '<button class="sort-btn ' + (lbSortKey === 'avgPoints' ? 'active' : '') + '" onclick="App.sortLeaderboard(\'avgPoints\',this)">Avg PPG</button>';
+    html += '</div>';
+
+    // ── Leaderboard cards ──
+    if (entries.length === 0) {
+      html += '<div class="empty-state"><p>No games played yet!</p></div>';
+    } else {
+      html += '<h3 class="lb-section-title">All-Time Leaderboard</h3>';
+      var rankColors = ['gold', 'silver', 'bronze'];
+      var rankMedals = ['🥇','🥈','🥉'];
+
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
+        var rc = rankColors[i] || '';
+        var rm = rankMedals[i] || (i + 1);
+        var kd = e.kd.toFixed(2);
+        var avg = e.avgPoints.toFixed(1);
+
+        html += '<div class="lb-card' + (i === 0 ? ' lb-card-first' : '') + '">';
+        html += '<div class="lb-card-header">';
+        html += '<span class="lb-card-rank ' + rc + '">' + rm + '</span>';
+        html += '<span class="lb-card-name">' + esc(e.name) + '</span>';
+        html += '<span class="lb-card-pts">' + e.totalPoints + ' pts</span>';
+        html += '</div>';
+        html += '<div class="lb-card-stats">';
+        html += '<div class="lb-stat"><span class="lb-stat-label">Games</span><span class="lb-stat-value">' + e.gamesPlayed + '</span></div>';
+        html += '<div class="lb-stat"><span class="lb-stat-label">Wins</span><span class="lb-stat-value">' + e.wins + (e.perfectWins ? ' (' + e.perfectWins + '✨)' : '') + '</span></div>';
+        html += '<div class="lb-stat"><span class="lb-stat-label">Kills</span><span class="lb-stat-value">' + e.totalKills + '</span></div>';
+        html += '<div class="lb-stat"><span class="lb-stat-label">Deaths</span><span class="lb-stat-value">' + e.totalDeaths + '</span></div>';
+        html += '<div class="lb-stat"><span class="lb-stat-label">K/D</span><span class="lb-stat-value">' + kd + '</span></div>';
+        html += '<div class="lb-stat"><span class="lb-stat-label">Best Streak</span><span class="lb-stat-value">' + e.bestStreak + '</span></div>';
+        html += '<div class="lb-stat"><span class="lb-stat-label">Avg PPG</span><span class="lb-stat-value">' + avg + '</span></div>';
+        html += '<div class="lb-stat"><span class="lb-stat-label">Perfect Wins</span><span class="lb-stat-value">' + e.perfectWins + '</span></div>';
+        html += '</div></div>';
+      }
+    }
+
+    container.innerHTML = html;
   }
 
   function resetLeaderboard() {
-    openModal(() => `
-      <div class="modal-title">Reset Leaderboard?</div>
-      <div class="modal-sub">All leaderboard stats will be permanently deleted.<br>Match history is kept.</div>
-      <div class="modal-actions">
-        <button class="btn btn-ghost"  onclick="App.closeModal()">Cancel</button>
-        <button class="btn btn-danger" onclick="App.doResetLeaderboard()">Reset</button>
-      </div>
-    `, true);
+    openModal(function() {
+      return '<div class="modal-title">Reset Leaderboard?</div>' +
+        '<div class="modal-sub">All stats permanently deleted. History kept.</div>' +
+        '<div class="modal-actions">' +
+        '<button class="btn btn-ghost" onclick="App.closeModal()">Cancel</button>' +
+        '<button class="btn btn-danger" onclick="App.doResetLeaderboard()">Reset</button>' +
+        '</div>';
+    }, true);
   }
+
   function doResetLeaderboard() {
     Storage.resetLeaderboard();
     closeModal();
@@ -601,11 +611,11 @@ const App = (() => {
     toast('Leaderboard reset', 'danger');
   }
 
-  // ── Match History ─────────────────────────────────────────────────────────────
+  // ── Match History ───────────────────────────────────────────────────────────
   function renderHistory() {
-    const history = Storage.getHistory();
-    const list    = document.getElementById('history-list');
-    const empty   = document.getElementById('history-empty');
+    var history = Storage.getHistory();
+    var list    = document.getElementById('history-list');
+    var empty   = document.getElementById('history-empty');
 
     if (history.length === 0) {
       list.innerHTML = '';
@@ -614,58 +624,60 @@ const App = (() => {
     }
     empty.classList.add('hidden');
 
-    list.innerHTML = history.map(m => {
-      const date   = new Date(m.finishedAt || m.startedAt);
-      const dateStr = date.toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' });
-      const timeStr = date.toLocaleTimeString(undefined, { hour:'2-digit', minute:'2-digit' });
-      const sorted  = [...m.players].sort((a,b) => b.score - a.score);
+    var html = '';
+    for (var m = 0; m < history.length; m++) {
+      var match   = history[m];
+      var date    = new Date(match.finishedAt || match.startedAt);
+      var dateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+      var timeStr = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      var sorted  = [].concat(match.players).sort(function(a, b) { return b.score - a.score; });
+      var names   = match.players.map(function(p) { return esc(p.name); }).join(' · ');
+      var winText = match.winner
+        ? 'Winner: <strong>' + esc(match.winner) + '</strong>' + (match.isPerfectWin ? ' ✨ Perfect' : '')
+        : 'Result: Draw';
 
-      return `
-        <div class="history-item" id="hist-${m.id}">
-          <div class="history-item-top">
-            <div>
-              <div class="history-date">${dateStr} · ${timeStr}</div>
-              <div class="history-winner">
-                ${m.winner
-                  ? `Winner: <strong>${esc(m.winner)}</strong>${m.isPerfectWin ? ' ✨ Perfect' : ''}`
-                  : 'Result: Draw'}
-              </div>
-            </div>
-            <button class="history-delete" title="Delete" onclick="App.deleteMatch('${m.id}')">🗑</button>
-          </div>
-          <div class="history-players">${m.players.map(p => esc(p.name)).join(' · ')}</div>
-          <div class="history-toggle" onclick="App.toggleHistory('${m.id}')">▼ Show scores</div>
-          <div class="history-expand">
-            ${sorted.map((p, i) => `
-              <div class="history-expand-row">
-                <span class="hname">${['🥇','🥈','🥉'][i] || '  '} ${esc(p.name)}</span>
-                <span>${p.kills}K ${p.deaths}D</span>
-                <span class="hscore">${p.score} pts</span>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-      `;
-    }).join('');
+      html += '<div class="history-item" id="hist-' + match.id + '">';
+      html += '<div class="history-item-top"><div>';
+      html += '<div class="history-date">' + dateStr + ' · ' + timeStr + '</div>';
+      html += '<div class="history-winner">' + winText + '</div>';
+      html += '</div>';
+      html += '<button class="history-delete" title="Delete" onclick="App.deleteMatch(\'' + match.id + '\')">🗑</button>';
+      html += '</div>';
+      html += '<div class="history-players">' + names + '</div>';
+      html += '<div class="history-toggle" onclick="App.toggleHistory(\'' + match.id + '\')">▼ Show scores</div>';
+      html += '<div class="history-expand">';
+      var medals = ['🥇','🥈','🥉'];
+      for (var i = 0; i < sorted.length; i++) {
+        html += '<div class="history-expand-row">';
+        html += '<span class="hname">' + (medals[i] || '  ') + ' ' + esc(sorted[i].name) + '</span>';
+        html += '<span>' + sorted[i].kills + 'K ' + sorted[i].deaths + 'D</span>';
+        html += '<span class="hscore">' + sorted[i].score + ' pts</span>';
+        html += '</div>';
+      }
+      html += '</div></div>';
+    }
+    list.innerHTML = html;
   }
 
   function toggleHistory(id) {
-    const item = document.getElementById('hist-' + id);
+    var item = document.getElementById('hist-' + id);
     if (!item) return;
-    const expanded = item.classList.toggle('expanded');
-    item.querySelector('.history-toggle').textContent = expanded ? '▲ Hide scores' : '▼ Show scores';
+    var expanded = item.classList.toggle('expanded');
+    var toggle = item.querySelector('.history-toggle');
+    if (toggle) toggle.textContent = expanded ? '▲ Hide scores' : '▼ Show scores';
   }
 
   function deleteMatch(id) {
-    openModal(() => `
-      <div class="modal-title">Delete Match?</div>
-      <div class="modal-sub">This match will be removed from history.<br>Leaderboard is not affected.</div>
-      <div class="modal-actions">
-        <button class="btn btn-ghost"  onclick="App.closeModal()">Cancel</button>
-        <button class="btn btn-danger" onclick="App.doDeleteMatch('${id}')">Delete</button>
-      </div>
-    `, true);
+    openModal(function() {
+      return '<div class="modal-title">Delete Match?</div>' +
+        '<div class="modal-sub">This match will be removed from history.</div>' +
+        '<div class="modal-actions">' +
+        '<button class="btn btn-ghost" onclick="App.closeModal()">Cancel</button>' +
+        '<button class="btn btn-danger" onclick="App.doDeleteMatch(\'' + id + '\')">Delete</button>' +
+        '</div>';
+    }, true);
   }
+
   function doDeleteMatch(id) {
     Storage.deleteFromHistory(id);
     closeModal();
@@ -674,15 +686,16 @@ const App = (() => {
   }
 
   function clearHistory() {
-    openModal(() => `
-      <div class="modal-title">Clear All History?</div>
-      <div class="modal-sub">All match records will be permanently deleted.<br>Leaderboard is not affected.</div>
-      <div class="modal-actions">
-        <button class="btn btn-ghost"  onclick="App.closeModal()">Cancel</button>
-        <button class="btn btn-danger" onclick="App.doClearHistory()">Clear All</button>
-      </div>
-    `, true);
+    openModal(function() {
+      return '<div class="modal-title">Clear All History?</div>' +
+        '<div class="modal-sub">All match records permanently deleted.</div>' +
+        '<div class="modal-actions">' +
+        '<button class="btn btn-ghost" onclick="App.closeModal()">Cancel</button>' +
+        '<button class="btn btn-danger" onclick="App.doClearHistory()">Clear All</button>' +
+        '</div>';
+    }, true);
   }
+
   function doClearHistory() {
     Storage.clearHistory();
     closeModal();
@@ -690,38 +703,38 @@ const App = (() => {
     toast('History cleared', 'danger');
   }
 
-  // ── Export ────────────────────────────────────────────────────────────────────
+  // ── Export ───────────────────────────────────────────────────────────────────
   function exportData() {
-    const data = {
-      exportedAt:  new Date().toISOString(),
+    var data = {
+      exportedAt: new Date().toISOString(),
       leaderboard: Storage.getLeaderboard(),
-      history:     Storage.getHistory(),
+      history: Storage.getHistory(),
     };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
+    var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    var url  = URL.createObjectURL(blob);
+    var a    = document.createElement('a');
     a.href     = url;
-    a.download = `gbst-export-${Date.now()}.json`;
+    a.download = 'gbst-export-' + Date.now() + '.json';
     a.click();
     URL.revokeObjectURL(url);
     toast('Data exported!');
   }
 
-  // ── Modal ─────────────────────────────────────────────────────────────────────
-  function openModal(renderFn, centered = false) {
-    const overlay = document.getElementById('modal-overlay');
-    const modal   = document.getElementById('modal');
-    overlay.classList.toggle('top', centered);
+  // ── Modal ───────────────────────────────────────────────────────────────────
+  function openModal(renderFn, centered) {
+    var overlay = document.getElementById('modal-overlay');
+    overlay.classList.toggle('top', !!centered);
     overlay.classList.remove('hidden');
-    document.getElementById('modal-content').innerHTML = renderFn();
-    // Store renderFn for refresh
+    var result = renderFn();
+    document.getElementById('modal-content').innerHTML = result || '';
     overlay._renderFn = renderFn;
   }
 
   function refreshModal(renderFn) {
-    const overlay = document.getElementById('modal-overlay');
+    var overlay = document.getElementById('modal-overlay');
     overlay._renderFn = renderFn;
-    document.getElementById('modal-content').innerHTML = renderFn();
+    var result = renderFn();
+    document.getElementById('modal-content').innerHTML = result || '';
   }
 
   function closeModal() {
@@ -733,63 +746,67 @@ const App = (() => {
     if (event.target === document.getElementById('modal-overlay')) closeModal();
   }
 
-  // ── Toast ─────────────────────────────────────────────────────────────────────
-  function toast(msg, type = '') {
-    const el = document.createElement('div');
-    el.className = 'toast ' + type;
+  // ── Toast ───────────────────────────────────────────────────────────────────
+  function toast(msg, type) {
+    var el = document.createElement('div');
+    el.className = 'toast ' + (type || '');
     el.textContent = msg;
     document.getElementById('toast-container').appendChild(el);
-    setTimeout(() => el.remove(), 2400);
+    setTimeout(function() { el.remove(); }, 2400);
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────────
+  // ── Helpers ─────────────────────────────────────────────────────────────────
   function esc(str) {
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
+    var d = document.createElement('div');
+    d.textContent = String(str);
+    return d.innerHTML;
   }
 
-  // ── Init ──────────────────────────────────────────────────────────────────────
-  function init() {
-    applyTheme(Storage.getDarkMode());
-    showHome();
-  }
-
-  // ── Public API ────────────────────────────────────────────────────────────────
+  // ── Public API ──────────────────────────────────────────────────────────────
   return {
-    // Navigation
-    showHome, showNewGame, showLeaderboard, showHistory, showRules, goHomeFromGame,
-    // Theme
-    toggleDarkMode,
-    // New game
-    addPlayer, removePlayer, addSavedPlayer, startGame, resumeGame, rematch,
-    // Live game
-    undoAction,
-    startKillAction, killStep1, killSelectKiller, killSelectVictim, executeKill,
-    startTradeAction, tradeToggle, executeTrade,
-    confirmForceEnd, forceEndGame,
-    // Leaderboard
-    sortLeaderboard, resetLeaderboard, doResetLeaderboard,
-    // History
-    toggleHistory, deleteMatch, doDeleteMatch, clearHistory, doClearHistory,
-    // Export
-    exportData,
-    // Modal
-    closeModal, closeModalOutside,
+    showHome: showHome,
+    showNewGame: showNewGame,
+    showLeaderboard: showLeaderboard,
+    showHistory: showHistory,
+    showRules: showRules,
+    goHomeFromGame: goHomeFromGame,
+    toggleDarkMode: toggleDarkMode,
+    addPlayer: addPlayer,
+    removePlayer: removePlayer,
+    addSavedPlayer: addSavedPlayer,
+    startGame: startGame,
+    resumeGame: resumeGame,
+    rematch: rematch,
+    undoAction: undoAction,
+    startKillAction: startKillAction,
+    killStep1: killStep1,
+    killSelectKiller: killSelectKiller,
+    killSelectVictim: killSelectVictim,
+    executeKill: executeKill,
+    startTradeAction: startTradeAction,
+    tradeToggle: tradeToggle,
+    executeTrade: executeTrade,
+    confirmForceEnd: confirmForceEnd,
+    forceEndGame: forceEndGame,
+    sortLeaderboard: sortLeaderboard,
+    resetLeaderboard: resetLeaderboard,
+    doResetLeaderboard: doResetLeaderboard,
+    toggleHistory: toggleHistory,
+    deleteMatch: deleteMatch,
+    doDeleteMatch: doDeleteMatch,
+    clearHistory: clearHistory,
+    doClearHistory: doClearHistory,
+    exportData: exportData,
+    closeModal: closeModal,
+    closeModalOutside: closeModalOutside,
   };
-
 })();
 
 // Boot
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', function() {
   window.App = App;
-  // Apply saved theme before first render to avoid flash
-  const dark = (() => {
-    try { const v = localStorage.getItem('gbst_dark_mode'); return v ? JSON.parse(v) : true; } catch { return true; }
-  })();
+  var dark;
+  try { var v = localStorage.getItem('gbst_dark_mode'); dark = v ? JSON.parse(v) : true; } catch(e) { dark = true; }
   document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
   App.showHome();
 });

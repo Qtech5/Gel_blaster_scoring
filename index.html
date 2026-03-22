@@ -53,7 +53,6 @@
       <div style="width:60px"></div>
     </div>
     <div class="view-content">
-
       <div class="card">
         <h3>Game Mode</h3>
         <div class="mode-select">
@@ -106,39 +105,15 @@
     </div>
   </div>
 
-  <!-- ══════════════════════ GAME SUMMARY ══════════════════════ -->
-  <div id="view-summary" class="view">
-    <div class="view-header">
-      <div style="width:60px"></div>
-      <h2>Game Over!</h2>
-      <div style="width:60px"></div>
-    </div>
-    <div class="view-content">
-      <div id="summary-winner-card" class="winner-card"></div>
-      <div id="summary-results"     class="results-list"></div>
-      <div class="summary-actions">
-        <button class="btn btn-primary"   onclick="App.rematch()">🔄 Rematch</button>
-        <button class="btn btn-secondary" onclick="App.showHome()">🏠 Home</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ══════════════════════ LEADERBOARD ══════════════════════ -->
+  <!-- ══════════════════════ LEADERBOARD (also serves as post-game screen) ══════════════════════ -->
   <div id="view-leaderboard" class="view">
     <div class="view-header">
       <button class="btn btn-back" onclick="App.showHome()">← Back</button>
-      <h2>Leaderboard</h2>
+      <h2>🏆 Leaderboard</h2>
       <button class="btn btn-ghost btn-small" onclick="App.resetLeaderboard()">Reset</button>
     </div>
     <div class="view-content">
-      <div class="sort-row">
-        <span class="sort-label">Sort by:</span>
-        <button class="sort-btn active" data-sort="totalPoints" onclick="App.sortLeaderboard('totalPoints',this)">Points</button>
-        <button class="sort-btn"        data-sort="wins"        onclick="App.sortLeaderboard('wins',this)">Wins</button>
-        <button class="sort-btn"        data-sort="avgPoints"   onclick="App.sortLeaderboard('avgPoints',this)">Avg PPG</button>
-      </div>
-      <div id="leaderboard-table" class="leaderboard-table"></div>
-      <div id="leaderboard-empty" class="empty-state hidden"><p>No games played yet!</p></div>
+      <div id="leaderboard-content"></div>
     </div>
   </div>
 
