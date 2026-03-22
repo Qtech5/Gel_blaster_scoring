@@ -42,6 +42,13 @@ const App = (() => {
   }
 
   function showLeaderboard() {
+    lastGameResult = null;  // clear so it shows a clean leaderboard
+    renderLeaderboard();
+    showView('leaderboard');
+  }
+
+  /** Called only from finishGame – shows leaderboard WITH the game result banner */
+  function showPostGameLeaderboard() {
     renderLeaderboard();
     showView('leaderboard');
   }
@@ -446,9 +453,8 @@ const App = (() => {
       players: currentGame.players.slice().sort(function(a, b) { return b.score - a.score; }),
     };
 
-    // Show leaderboard
-    renderLeaderboard();
-    showView('leaderboard');
+    // Show leaderboard with game result banner
+    showPostGameLeaderboard();
   }
 
   // ── Leaderboard ─────────────────────────────────────────────────────────────
@@ -513,41 +519,6 @@ const App = (() => {
 
     var html = '';
 
-    // ── Winner banner (only shown when coming from a finished game) ──
-    if (lastGameResult) {
-      if (lastGameResult.winner) {
-        html += '<div class="winner-card">';
-        html += '<div class="winner-label">Game Over!</div>';
-        html += '<div class="winner-name">🏆 ' + esc(lastGameResult.winner) + '</div>';
-        if (lastGameResult.isPerfectWin) {
-          html += '<div class="perfect-badge">✨ Perfect Win!</div>';
-        }
-        html += '</div>';
-      } else {
-        html += '<div class="winner-card"><div class="winner-label">Game Over!</div><div class="winner-name" style="font-size:1.3rem">🤝 Draw!</div></div>';
-      }
-
-      // Show this-game results
-      html += '<div class="card"><h3>This Game</h3><div class="results-list">';
-      var medals = ['🥇','🥈','🥉'];
-      var gp = lastGameResult.players;
-      for (var i = 0; i < gp.length; i++) {
-        html += '<div class="result-row">';
-        html += '<div class="result-rank">' + (medals[i] || (i + 1)) + '</div>';
-        html += '<div><div class="result-name">' + esc(gp[i].name) + '</div>';
-        html += '<div class="result-stats">K:' + gp[i].kills + ' D:' + gp[i].deaths + ' | Streak:' + gp[i].maxStreak + '</div></div>';
-        html += '<div class="result-score">' + gp[i].score + '</div>';
-        html += '</div>';
-      }
-      html += '</div></div>';
-
-      // Rematch / Home buttons
-      html += '<div class="summary-actions">';
-      html += '<button class="btn btn-primary" onclick="App.rematch()">🔄 Rematch</button>';
-      html += '<button class="btn btn-secondary" onclick="App.showHome()">🏠 Home</button>';
-      html += '</div>';
-    }
-
     // ── Sort row ──
     html += '<div class="sort-row">';
     html += '<span class="sort-label">Sort by:</span>';
@@ -588,6 +559,40 @@ const App = (() => {
         html += '<div class="lb-stat"><span class="lb-stat-label">Perfect Wins</span><span class="lb-stat-value">' + e.perfectWins + '</span></div>';
         html += '</div></div>';
       }
+    }
+
+    // ── Game result (shown BELOW leaderboard after a game ends) ──
+    if (lastGameResult) {
+      html += '<div style="margin-top:8px"></div>';
+      if (lastGameResult.winner) {
+        html += '<div class="winner-card">';
+        html += '<div class="winner-label">Last Game</div>';
+        html += '<div class="winner-name">🏆 ' + esc(lastGameResult.winner) + '</div>';
+        if (lastGameResult.isPerfectWin) {
+          html += '<div class="perfect-badge">✨ Perfect Win!</div>';
+        }
+        html += '</div>';
+      } else {
+        html += '<div class="winner-card"><div class="winner-label">Last Game</div><div class="winner-name" style="font-size:1.3rem">🤝 Draw!</div></div>';
+      }
+
+      var medals = ['🥇','🥈','🥉'];
+      var gp = lastGameResult.players;
+      html += '<div class="card"><h3>Game Results</h3><div class="results-list">';
+      for (var j = 0; j < gp.length; j++) {
+        html += '<div class="result-row">';
+        html += '<div class="result-rank">' + (medals[j] || (j + 1)) + '</div>';
+        html += '<div><div class="result-name">' + esc(gp[j].name) + '</div>';
+        html += '<div class="result-stats">K:' + gp[j].kills + ' D:' + gp[j].deaths + ' | Streak:' + gp[j].maxStreak + '</div></div>';
+        html += '<div class="result-score">' + gp[j].score + '</div>';
+        html += '</div>';
+      }
+      html += '</div></div>';
+
+      html += '<div class="summary-actions">';
+      html += '<button class="btn btn-primary" onclick="App.rematch()">🔄 Rematch</button>';
+      html += '<button class="btn btn-secondary" onclick="App.showHome()">🏠 Home</button>';
+      html += '</div>';
     }
 
     container.innerHTML = html;
@@ -720,6 +725,31 @@ const App = (() => {
     toast('Data exported!');
   }
 
+  // ── Reset All ──────────────────────────────────────────────────────────────
+  function resetAllStats() {
+    openModal(function() {
+      return '<div class="modal-title">Reset Everything?</div>' +
+        '<div class="modal-sub">This will permanently delete:<br>• Leaderboard &amp; all stats<br>• Match history<br>• Saved player list<br>• Any in-progress game</div>' +
+        '<div class="modal-actions">' +
+        '<button class="btn btn-ghost" onclick="App.closeModal()">Cancel</button>' +
+        '<button class="btn btn-danger" onclick="App.doResetAll()">Reset All</button>' +
+        '</div>';
+    }, true);
+  }
+
+  function doResetAll() {
+    Storage.resetLeaderboard();
+    Storage.clearHistory();
+    Storage.clearCurrentGame();
+    Storage.savePlayers([]);
+    closeModal();
+    lastGameResult = null;
+    currentGame = null;
+    undoStack = [];
+    showHome();
+    toast('All data reset', 'danger');
+  }
+
   // ── Modal ───────────────────────────────────────────────────────────────────
   function openModal(renderFn, centered) {
     var overlay = document.getElementById('modal-overlay');
@@ -797,6 +827,8 @@ const App = (() => {
     clearHistory: clearHistory,
     doClearHistory: doClearHistory,
     exportData: exportData,
+    resetAllStats: resetAllStats,
+    doResetAll: doResetAll,
     closeModal: closeModal,
     closeModalOutside: closeModalOutside,
   };

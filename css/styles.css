@@ -254,7 +254,7 @@ ul { list-style: none; }
 .player-count-msg { text-align: center; font-size: 0.85rem; color: var(--text-muted); }
 
 /* ── LIVE GAME ─────────────────────────────────────────────────── */
-#view-game {
+#view-game.active {
   height: 100vh;
   display: flex;
   flex-direction: column;
@@ -654,6 +654,20 @@ ul { list-style: none; }
 .hidden { display: none !important; }
 .empty-state { text-align: center; padding: 48px 24px; color: var(--text-muted); }
 .empty-state p { font-size: 1rem; }
+
+/* ── Version tag ───────────────────────────────────────────────── */
+.version-tag {
+  position: fixed;
+  bottom: 6px;
+  right: 10px;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  opacity: 0.4;
+  pointer-events: none;
+  z-index: 5;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
 
 /* ── Scrollbar ─────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 4px; }
