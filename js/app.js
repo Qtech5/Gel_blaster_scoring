@@ -226,7 +226,8 @@ const App = (() => {
     renderGame();
 
     if (currentGame.finished) {
-      setTimeout(endGame, 600);
+      // Short delay so the final kill/OUT badge is visible before summary appears
+      setTimeout(endGame, 350);
     }
   }
 
@@ -411,13 +412,25 @@ const App = (() => {
 
   // ── Force End ─────────────────────────────────────────────────────────────────
   function confirmForceEnd() {
-    const alive = Game.alivePlayers(currentGame);
-    if (alive.length === 1) {
-      // Normal end – no need to force
-      const result = Game.forceEnd(currentGame);
-      applyAction(result);
+    // If the game already finished naturally (auto-end timer pending), go straight to summary
+    if (currentGame.finished) {
+      endGame();
       return;
     }
+
+    const alive = Game.alivePlayers(currentGame);
+
+    if (alive.length <= 1) {
+      // One (or zero) alive — end naturally without a modal
+      const result = Game.forceEnd(currentGame);
+      pushUndo(result.snapshot);
+      currentGame = result.game;
+      saveGameState();
+      endGame();
+      return;
+    }
+
+    // Multiple players still alive — ask for confirmation
     openModal(() => `
       <div class="modal-title">🏁 End Game?</div>
       <div class="modal-sub">
@@ -425,7 +438,7 @@ const App = (() => {
         Highest score wins with +3 bonus.
       </div>
       <div class="preview-box">
-        ${alive.sort((a,b) => b.score - a.score).slice(0,3).map((p,i) =>
+        ${[...alive].sort((a,b) => b.score - a.score).slice(0,3).map((p,i) =>
           `<div class="preview-row"><span>${i===0?'🥇':i===1?'🥈':'🥉'} ${esc(p.name)}</span><span>${p.score} pts</span></div>`
         ).join('')}
       </div>
@@ -439,11 +452,20 @@ const App = (() => {
   function forceEndGame() {
     closeModal();
     const result = Game.forceEnd(currentGame);
-    applyAction(result);
+    pushUndo(result.snapshot);
+    currentGame = result.game;
+    saveGameState();
+    // Navigate to summary immediately — no timer
+    endGame();
   }
 
   // ── End Game / Summary ────────────────────────────────────────────────────────
+  let _lastEndedGameId = null; // prevents double-recording if auto-end and manual end race
+
   function endGame() {
+    if (!currentGame || _lastEndedGameId === currentGame.id) return;
+    _lastEndedGameId = currentGame.id;
+
     const summary = Game.buildSummary(currentGame);
     lastGamePlayers = currentGame.players.map(p => p.name);
 

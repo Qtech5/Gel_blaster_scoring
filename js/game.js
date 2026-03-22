@@ -33,8 +33,10 @@ const Game = (() => {
   /**
    * Check if game should end and apply win bonuses.
    * Called after every action that might eliminate a player.
+   * Guard prevents bonus being applied twice if called on an already-finished game.
    */
   function checkEnd(game) {
+    if (game.finished) return;          // already ended — don't double-apply bonuses
     const alive = game.players.filter(p => !p.isOut);
 
     if (alive.length === 1) {
